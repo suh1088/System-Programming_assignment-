@@ -178,7 +178,7 @@ NOTES:
  *   Rating: 1
  */
 int bitAnd(int x, int y) {
-  return 2;
+  return ~(~x|~y);
 }
 /* 
  * bitXor - x^y using only ~ and & 
@@ -188,7 +188,7 @@ int bitAnd(int x, int y) {
  *   Rating: 1
  */
 int bitXor(int x, int y) {
-  return 2;
+  return ~(~(~x&y) & ~(x&~y));
 }
 /*
  * isTmin - returns 1 if x is the minimum, two's complement number,
@@ -198,7 +198,9 @@ int bitXor(int x, int y) {
  *   Rating: 1
  */
 int isTmin(int x) {
-  return 2;
+  return !!x & !(x^(~x+1));
+  // return !(x+x)&!(!x);
+  // why this is't work??
 }
 //2
 /* 
@@ -209,7 +211,7 @@ int isTmin(int x) {
  *   Rating: 2
  */
 int isEqual(int x, int y) {
-  return 2;
+  return !(x^y);
 }
 /* 
  * negate - return -x 
@@ -219,7 +221,7 @@ int isEqual(int x, int y) {
  *   Rating: 2
  */
 int negate(int x) {
-  return 2;
+  return ~x + 1;
 }
 /* 
  * getByte - Extract byte n from word x
@@ -230,7 +232,9 @@ int negate(int x) {
  *   Rating: 2
  */
 int getByte(int x, int n) {
-  return 2;
+  n <<= 3;
+  x >>= n;   
+  return x & 0xFF;
 }
 //3
 /* 
@@ -241,7 +245,8 @@ int getByte(int x, int n) {
  *   Rating: 3
  */
 int isLess(int x, int y) {
-  return 2;
+  
+  return !!((x + (~y + 1)) >> 31);
 }
 /* 
  * conditional - same as x ? y : z 
@@ -251,7 +256,10 @@ int isLess(int x, int y) {
  *   Rating: 3
  */
 int conditional(int x, int y, int z) {
-  return 2;
+  x = !!x;
+  x <<= 31;
+  x >>= 31;
+  return (y&x) | (z&~x);
 }
 //4
 /* 
@@ -266,7 +274,18 @@ int conditional(int x, int y, int z) {
  *   Rating: 4
  */
 unsigned floatScale2(unsigned uf) {
-  return 2;
+  unsigned s = uf >> 31;
+  unsigned exp = (uf >> 23) & 0xFF;
+  unsigned frac = uf & 0x7FFFFF;
+  
+  if(exp == 0){
+	  frac <<= 1;
+  }
+  else if(exp == 0xFF){}
+  else{
+	  exp++;
+  }
+  return (s<<31)|(exp<<23)|frac;
 }
 /* 
  * floatFloat2Int - Return bit-level equivalent of expression (int) f
@@ -281,5 +300,31 @@ unsigned floatScale2(unsigned uf) {
  *   Rating: 4
  */
 int floatFloat2Int(unsigned uf) {
-  return 2;
+  unsigned s = uf >> 31;
+  unsigned exp = ((uf >> 23) & 0xFF) - 127;
+  unsigned frac = uf & 0x7FFFFF;
+  
+  int sol = frac + 0x800000;
+
+  if(exp < 0){
+          sol = 0;
+  }
+  else if(exp == 0xFF){
+  	return 0x80000000u;
+  }
+  else{
+        if(exp < 23){
+		sol >>= (23-exp);
+	}
+	else{
+		sol <<= (exp - 23);
+	}
+	if(s){
+		sol = ~sol +1;
+	}
+  }
+
+  return sol;
+
+
 }
