@@ -301,30 +301,35 @@ unsigned floatScale2(unsigned uf) {
  */
 int floatFloat2Int(unsigned uf) {
   unsigned s = uf >> 31;
-  unsigned exp = ((uf >> 23) & 0xFF) - 127;
+  int exp = ((uf >> 23) & 0xFF) - 127;
   unsigned frac = uf & 0x7FFFFF;
   
-  int sol = frac + 0x800000;
-
-  if(exp < 0){
-          sol = 0;
+  int sol = frac | 0x800000;
+  
+  if(exp == -127){
+	return 0;
   }
-  else if(exp == 0xFF){
-  	return 0x80000000u;
+  else if(exp == 128){
+	return 0x80000000u;
   }
   else{
-        if(exp < 23){
-		sol >>= (23-exp);
+	if(exp >= 31){
+		return 0x80000000u;
+      	}		
+	else if(exp > 23){
+		sol <<= exp - 23;
 	}
-	else{
-		sol <<= (exp - 23);
+	else if(exp < 0){
+		return 0;
 	}
+	else if(exp <= 23){
+		sol >>= 23-exp;
+	}
+	
 	if(s){
 		sol = ~sol +1;
 	}
   }
-
   return sol;
-
 
 }
