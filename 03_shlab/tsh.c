@@ -1,8 +1,8 @@
 /*
  * tsh - A tiny shell program with job control
  *
- * Name: <fill in>
- * Student id: <fill in>
+ * Name: park su hyun
+ * Student id: 2022063672
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -171,6 +171,38 @@ int main(int argc, char **argv)
  */
 void eval(char *cmdline)
 {
+	pid_t pid;
+	char* argv[MAXARGS];
+	int bg;
+	bg = parseline(cmdline, argv);
+	
+	if(argv[0] == NULL){
+		return;
+	}
+	if(cmdline[0] == '\n'){
+		return;
+	}	
+
+	if(!builtin_cmd(argv)){
+		if((pid = fork()) == 0){
+			setpgid(0,0);
+			execve(argv[0], argv, environ);
+
+			fprintf(stderr, "%s: Command not found\n", argv[0]);
+			exit(0);			
+		}	
+		
+		
+		
+		if(!bg){
+			addjob(jobs, pid, FG, cmdline);
+			waitfg(pid);
+		}
+		else{
+			addjob(jobs, pid, BG, cmdline);
+			fprintf(stderr, "[%d] (%d) %s", pid2jid(pid), pid, cmdline);
+		}
+	}
 	return;
 }
 
@@ -237,14 +269,103 @@ int parseline(const char *cmdline, char **argv)
  */
 int builtin_cmd(char **argv)
 {
+	if(strcmp(argv[0], "quit") == 0){
+		//printf("%s\n", argv[0]);
+		exit(0);
+	}
+	else if(strcmp(argv[0], "jobs") == 0){
+                //printf("%s\n", argv[0]);
+        	listjobs(jobs);
+                return 1;
+        }
+	else if(strcmp(argv[0], "bg") == 0){
+                //printf("%s\n", argv[0]);
+		do_bgfg(argv);                
+                return 1;
+        }
+	else if(strcmp(argv[0], "fg") == 0){
+                //printf("%s\n", argv[0]);
+                do_bgfg(argv);
+                return 1;
+        }
 	return 0;     /* not a builtin command */
 }
 
 /*
  * do_bgfg - Execute the builtin bg and fg commands
  */
+/*
+ * Jobs states: FG (foreground), BG (background), ST (stopped)
+ * Job state transitions and enabling actions:
+ *     FG -> ST  : ctrl-z
+ *     ST -> FG  : fg command OK
+ *     ST -> BG  : bg command OK
+ *     BG -> FG  : fg command OK
+ * At most 1 job can be in the FG state.
+ */
 void do_bgfg(char **argv)
 {
+	struct job_t* job;
+	int pid;
+	int jid;
+	char* id_str = NULL;
+
+	if(argv[1] == NULL){
+		fprintf(stderr, "%s command requires PID or %%jobid argument\n", argv[0]);
+		return;
+	}
+
+
+	if(argv[1][0] == '%'){
+		id_str = &argv[1][1];
+		if(*id_str == '\0' || !isdigit((unsigned char)*id_str)){
+			fprintf(stderr, "%s: argument must be a PID or %%jobid\n", argv[0]);
+			return;
+		}
+
+                jid = atoi(id_str);
+                job = getjobjid(jobs, jid);
+                //pid = job->pid;
+		
+		if(job == NULL){
+			fprintf(stderr, "%%%d: No such job\n", jid);
+			return;
+		}
+		pid = job->pid;
+	}
+        else{
+		id_str = argv[1];
+                if(*id_str == '\0' || !isdigit((unsigned char)*id_str)){
+                        fprintf(stderr, "%s: argument must be a PID or %%jobid\n", argv[0]);
+                        return;
+                }
+
+        	pid = atoi(id_str);
+                //jid = pid2jid(pid);
+                job = getjobpid(jobs, pid);
+
+		if(job == NULL){
+			fprintf(stderr, "(%d): No such process\n", pid);
+			return;
+		}
+		jid = job->jid;
+	}
+
+
+	//if(verbose) fprintf(stderr, "[%d] (%d) %s", jid, pid, job->cmdline);
+	if(strcmp(argv[0], "fg") == 0){
+		if(job->state == ST){
+			kill(-pid, SIGCONT);
+		}
+		//else if(job->state == BG){}
+		job->state = FG;
+		waitfg(pid);
+	}
+	else if(strcmp(argv[0], "bg") == 0){
+		fprintf(stderr, "[%d] (%d) %s", jid, pid, job->cmdline);
+                job->state = BG;
+                kill(-pid, SIGCONT);
+	}	
 	return;
 }
 
@@ -253,6 +374,20 @@ void do_bgfg(char **argv)
  */
 void waitfg(pid_t pid)
 {
+	char* prmp = "waitfg:";
+	sigset_t mask, prev;
+
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGCHLD);
+
+	sigprocmask(SIG_BLOCK, &mask, &prev);
+
+	while(pid == fgpid(jobs))
+		sigsuspend(&prev);
+
+	sigprocmask(SIG_SETMASK, &prev, NULL);
+	if(verbose)
+		fprintf(stderr, "%s Process (%ld) no longer the fg process\n", prmp, (long)pid);
 	return;
 }
 
@@ -269,6 +404,59 @@ void waitfg(pid_t pid)
  */
 void sigchld_handler(int sig)
 {
+	char* prmp = "sigchld_handler:";
+	int oldererrno = errno;
+	pid_t pid;
+	int jid;
+	int status;
+	struct job_t* job;
+
+	//sigset_t mask, prev;
+	//sigemptyset(&mask);
+	//sigaddset(&mask, SIGCHLD);
+	//sigprocmask(SIG_BLOCK, &mask, &prev);
+
+	if(verbose){
+                fprintf(stderr, "%s entering\n", prmp);
+	}
+
+	while((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0){
+		job = getjobpid(jobs, pid);
+		if(job == NULL) continue;
+		jid = pid2jid(pid);
+
+		if(WIFSTOPPED(status)){
+			job->state = ST;
+
+			fprintf(stderr, "Job [%d] (%ld) stopped by signal %d\n", jid, (long)pid, WSTOPSIG(status));
+		}
+
+		else if(WIFSIGNALED(status)){
+			deletejob(jobs, pid);
+			fprintf(stderr, "Job [%d] (%ld) terminated by signal %d\n", jid, (long)pid, WTERMSIG(status));
+		}
+
+		else if(WIFEXITED(status)){
+			deletejob(jobs, pid);
+
+			if(verbose){
+ 	                      	fprintf(stderr, "%s Job [%d] (%ld) deleted\n", prmp, jid, (long)pid);
+                	}
+
+			if(verbose && WIFEXITED(status)){
+	                        fprintf(stderr, "%s Job [%d] (%ld) terminates OK (status %d)\n", prmp, jid, (long)pid, WEXITSTATUS(status));
+			}
+		}
+	}
+	
+	//if(errno != ECHILD) unix_error("wait error");
+
+	if(verbose){
+		fprintf(stderr, "%s exiting\n", prmp);
+	}
+
+	//sigprocmask(SIG_SETMASK, &prev, NULL);
+	errno = oldererrno;
 	return;
 }
 
@@ -279,6 +467,21 @@ void sigchld_handler(int sig)
  */
 void sigint_handler(int sig)
 {
+	int olderrno = errno;
+	char* prmp = "sigint_handler:";
+	pid_t pid;
+
+	if(verbose) fprintf(stderr, "%s entering\n", prmp);
+
+	pid = fgpid(jobs);
+	if(pid > 0){
+	       	kill(-pid, SIGINT);
+		if(verbose) fprintf(stderr, "%s Job (%ld) killed\n", prmp, (long)pid);
+
+	}
+	
+	if(verbose) fprintf(stderr, "%s exiting\n", prmp);
+	errno = olderrno;
 	return;
 }
 
@@ -289,6 +492,24 @@ void sigint_handler(int sig)
  */
 void sigtstp_handler(int sig)
 {
+	int olderrno = errno;
+	char* prmp = "sigtstp_handler:";
+	pid_t pid;
+
+        if(verbose){
+                fprintf(stderr, "%s entering\n", prmp);
+        }
+
+        pid = fgpid(jobs);
+	if(pid > 0){
+		kill(-pid, SIGTSTP);
+		if(verbose) fprintf(stderr, "%s Job (%ld) stopped\n", prmp, (long)pid);
+	}
+
+	if(verbose){
+                fprintf(stderr, "%s exiting\n", prmp);
+        }
+	errno = olderrno;
 	return;
 }
 
